@@ -1,1 +1,2 @@
 Моя первая практическая работа с Git
+I am beginning to understand Git!
