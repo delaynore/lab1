@@ -1,0 +1,85 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+ENV['VAGRANT_SERVER_URL'] = 'https://vagrant.elab.pro/'
+
+Vagrant.configure("2") do |config|
+  config.vm.box = "precise32"
+  config.vbguest.auto_update = false
+  config.vm.boot_timeout = 1800
+
+  config.vm.define "webserver" do |web|
+    web.vm.box = "bento/ubuntu-24.04"
+    web.vm.network "private_network", ip: "192.168.50.10"
+    
+    web.vm.provision "shell", inline: <<-SHELL
+      sudo apt-get update
+      sudo apt-get install apache2 -y
+      sudo systemctl enable apache2
+      sudo apt-get install -y mysql-client
+      sudo apt install php libapache2-mod-php php-mysql -y
+    SHELL
+
+    web.vm.provision "shell", path: "php_script.sh"
+
+    web.vm.provision "shell", inline: <<-SHELL
+      sudo systemctl restart apache2
+    SHELL
+  end
+
+  config.vm.define "dbserver" do |db|
+    db.vm.box = "bento/ubuntu-24.04"
+    db.vm.network "private_network", ip: "192.168.50.11"
+
+    db.vm.provision "shell", inline: <<-SHELL
+      sudo apt-get update
+      sudo apt-get install -y mysql-server
+      sudo systemctl enable mysql
+      
+      sudo sed -i 's/^bind-address.*/bind-address = 192.168.50.11/' /etc/mysql/mysql.conf.d/mysqld.cnf
+      sudo systemctl restart mysql
+    SHELL
+
+    db.vm.provision "file", source: "script.sql", destination: "/home/vagrant/script.sql"
+    db.vm.provision "shell", inline: <<-SHELL
+      mysql -u root < /home/vagrant/script.sql
+    SHELL
+  end
+
+  config.vm.define "loadbalancer" do |lb|
+    lb.vm.box = "bento/ubuntu-24.04"
+    lb.vm.network "public_network"
+
+    lb.vm.provision "shell", inline: <<-SHELL
+      sudo apt-get update
+      sudo apt-get install -y haproxy
+      sudo systemctl enable haproxy
+
+      sudo bash -c "cat > /etc/haproxy/haproxy.cfg <<'EOF'
+global
+    log /dev/log    local0
+    log /dev/log    local1 notice
+    daemon
+    maxconn 256
+
+defaults
+    log     global
+    mode    http
+    option  httplog
+    option  dontlognull
+    timeout connect 5000
+    timeout client  50000
+    timeout server  50000
+
+frontend http_front
+    bind *:80
+    default_backend http_back
+
+backend http_back
+    balance roundrobin
+    server webserver1 192.168.50.10:80 check inter 5000 rise 2 fall 3
+EOF"
+
+    sudo systemctl restart haproxy
+  SHELL
+  end
+end
